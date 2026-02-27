@@ -1,0 +1,23 @@
+# Gradle
+.gradle/
+build/
+**/build/
+
+# Android
+*.apk
+*.aab
+*.ap_
+*.dex
+local.properties
+
+# IDE
+.idea/
+*.iml
+*.iws
+*.ipr
+.DS_Store
+
+# NDK / CMake
+.externalNativeBuild/
+.cxx/
+cmake-build-*/
