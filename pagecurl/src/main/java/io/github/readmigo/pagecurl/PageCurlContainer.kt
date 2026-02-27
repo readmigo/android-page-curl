@@ -25,7 +25,6 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.util.VelocityTracker
 import androidx.compose.ui.layout.onSizeChanged
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
 import kotlinx.coroutines.launch
 import java.util.concurrent.ConcurrentLinkedQueue
@@ -213,8 +212,6 @@ fun PageCurlContainer(
             curlProgress.animateTo(0f, spring(Spring.DampingRatioMediumBouncy, Spring.StiffnessMedium))
         }
     }
-
-    val context = LocalContext.current
 
     Box(
         modifier = modifier
