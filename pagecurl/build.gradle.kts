@@ -1,6 +1,7 @@
 plugins {
     alias(libs.plugins.android.library)
     alias(libs.plugins.kotlin.android)
+    `maven-publish`
 }
 
 android {
@@ -64,4 +65,51 @@ dependencies {
     implementation(libs.androidx.ui.tooling.preview)
     implementation(libs.androidx.material3)
     debugImplementation(libs.androidx.ui.tooling)
+}
+
+afterEvaluate {
+    publishing {
+        publications {
+            create<MavenPublication>("release") {
+                from(components["release"])
+                groupId    = "io.github.readmigo"
+                artifactId = "pagecurl"
+                version    = System.getenv("LIBRARY_VERSION") ?: rootProject.version.toString()
+
+                pom {
+                    name.set("android-page-curl")
+                    description.set("Realistic OpenGL ES 3.0 page-curl animation library for Jetpack Compose")
+                    url.set("https://github.com/readmigo/android-page-curl")
+                    licenses {
+                        license {
+                            name.set("Apache License 2.0")
+                            url.set("https://www.apache.org/licenses/LICENSE-2.0")
+                        }
+                    }
+                    developers {
+                        developer {
+                            id.set("readmigo")
+                            name.set("Readmigo")
+                            url.set("https://github.com/readmigo")
+                        }
+                    }
+                    scm {
+                        url.set("https://github.com/readmigo/android-page-curl")
+                        connection.set("scm:git:git://github.com/readmigo/android-page-curl.git")
+                    }
+                }
+            }
+        }
+
+        repositories {
+            maven {
+                name = "GitHubPackages"
+                url = uri("https://maven.pkg.github.com/readmigo/android-page-curl")
+                credentials {
+                    username = System.getenv("GITHUB_ACTOR")
+                    password = System.getenv("GITHUB_TOKEN")
+                }
+            }
+        }
+    }
 }

@@ -1,0 +1,106 @@
+name: Bug Report
+description: Report a bug in android-page-curl
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for taking the time to report a bug. Please fill in as much detail as possible.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Bug Description
+      description: A clear and concise description of what the bug is.
+      placeholder: Describe the bug...
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to Reproduce
+      description: Steps to reproduce the behavior.
+      placeholder: |
+        1. Create PageCurlContainer with ...
+        2. Drag from right to left...
+        3. See error
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+      description: What did you expect to happen?
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual Behavior
+      description: What actually happened?
+    validations:
+      required: true
+
+  - type: textarea
+    id: logcat
+    attributes:
+      label: Logcat Output
+      description: |
+        Paste relevant logcat output. Filter with: `adb logcat -s pagecurl`
+      render: text
+
+  - type: input
+    id: library-version
+    attributes:
+      label: Library Version
+      placeholder: e.g. 1.0.0
+    validations:
+      required: true
+
+  - type: input
+    id: android-version
+    attributes:
+      label: Android Version
+      placeholder: e.g. Android 14 (API 34)
+    validations:
+      required: true
+
+  - type: input
+    id: device
+    attributes:
+      label: Device
+      placeholder: e.g. Pixel 7, Samsung Galaxy S24
+    validations:
+      required: true
+
+  - type: input
+    id: agp-version
+    attributes:
+      label: Android Gradle Plugin Version
+      placeholder: e.g. 8.2.2
+
+  - type: input
+    id: ndk-version
+    attributes:
+      label: NDK Version
+      placeholder: e.g. 27.0.12077973
+
+  - type: textarea
+    id: minimal-repro
+    attributes:
+      label: Minimal Reproducible Example
+      description: If possible, provide the smallest amount of code that demonstrates the bug.
+      render: kotlin
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Checklist
+      options:
+        - label: I have searched for existing issues before filing this one.
+          required: true
+        - label: I can reproduce this issue with the latest version of the library.
+          required: true
