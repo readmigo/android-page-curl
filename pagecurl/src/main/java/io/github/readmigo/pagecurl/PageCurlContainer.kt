@@ -1,18 +1,18 @@
 package io.github.readmigo.pagecurl
 
 import android.graphics.Bitmap
-import android.opengl.GLSurfaceView
+import android.graphics.Paint
+import android.graphics.PointF
+import android.graphics.RectF
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -21,104 +21,34 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
+import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.util.VelocityTracker
 import androidx.compose.ui.layout.onSizeChanged
-import androidx.compose.ui.viewinterop.AndroidView
 import kotlinx.coroutines.launch
-import java.util.concurrent.ConcurrentLinkedQueue
-import java.util.concurrent.atomic.AtomicLong
-import javax.microedition.khronos.egl.EGLConfig
-import javax.microedition.khronos.opengles.GL10
 import kotlin.math.abs
 
 private const val COMPLETION_THRESHOLD = 0.35f
-private const val VELOCITY_THRESHOLD   = 500f
+private const val VELOCITY_THRESHOLD = 500f
 
-// ---------------------------------------------------------------------------
-// Internal render state – bridges Compose thread and GL thread safely
-// ---------------------------------------------------------------------------
-
-private class PageCurlRenderState {
-    /** Normalized fold position [0,1]: 1.0 = fully flat, 0.0 = fully turned (forward). */
-    @Volatile var foldX: Float = 1.0f
-    /** Diagonal tilt of fold line; 0 = vertical, positive = bottom-right corner peels first. */
-    @Volatile var foldSlope: Float = 0.0f
-    /** True = forward curl (right-to-left), false = backward curl (left-to-right). */
-    @Volatile var isForward: Boolean = true
-    /** Background color ARGB for GL clear. */
-    @Volatile var bgColor: Int = android.graphics.Color.WHITE
-
-    // Bitmaps queued for upload to the GL thread.
-    val pendingTextures: ConcurrentLinkedQueue<Pair<Int, Bitmap>> = ConcurrentLinkedQueue()
-}
-
-// ---------------------------------------------------------------------------
-// GL Renderer
-// ---------------------------------------------------------------------------
-
-private class PageCurlGLRenderer(
-    private val state: PageCurlRenderState,
-    private val nativePtr: AtomicLong
-) : GLSurfaceView.Renderer {
-
-    override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
-        val ptr = nativePtr.get()
-        if (ptr != 0L) PageCurlJNI.nativeSurfaceCreated(ptr)
-    }
-
-    override fun onSurfaceChanged(gl: GL10?, width: Int, height: Int) {
-        val ptr = nativePtr.get()
-        if (ptr != 0L) PageCurlJNI.nativeSurfaceChanged(ptr, width, height)
-    }
-
-    override fun onDrawFrame(gl: GL10?) {
-        val ptr = nativePtr.get()
-        if (ptr == 0L) return
-
-        // Upload any pending bitmaps
-        while (true) {
-            val (slot, bitmap) = state.pendingTextures.poll() ?: break
-            if (!bitmap.isRecycled) {
-                // Ensure ARGB_8888 format for the JNI layer
-                val src = if (bitmap.config == Bitmap.Config.ARGB_8888) {
-                    bitmap
-                } else {
-                    bitmap.copy(Bitmap.Config.ARGB_8888, false)
-                }
-                PageCurlJNI.nativeSetBitmap(ptr, slot, src)
-                if (src !== bitmap) src.recycle()
-            }
-        }
-
-        val foldX     = state.foldX
-        val foldSlope = state.foldSlope
-        val forward   = state.isForward
-
-        if (forward) {
-            PageCurlJNI.nativeDrawForward(ptr, foldX, foldSlope)
-        } else {
-            PageCurlJNI.nativeDrawBackward(ptr, foldX, foldSlope)
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Public Composable
-// ---------------------------------------------------------------------------
+// Back-face rendering: opacity of the mirrored page content (0-255)
+private const val BACK_FACE_CONTENT_ALPHA = 180
+// Back-face rendering: semi-transparent white overlay for paper-back look
+private const val BACK_FACE_OVERLAY_ALPHA = 50
 
 /**
- * A realistic OpenGL ES page-curl container.
+ * A realistic Canvas-based page-curl container for Jetpack Compose.
  *
  * Callers supply a list of [Bitmap]s (one per page). Rendering, gesture
- * handling, and curl animation are handled internally via a [GLSurfaceView].
+ * handling, and curl animation are handled internally using Android Canvas
+ * with bezier fold-line geometry.
  *
  * @param pages           Pre-rendered page bitmaps.
- * @param backgroundColor Background color shown before bitmaps are uploaded.
+ * @param backgroundColor Background color shown when no page is drawn.
  * @param startFromLastPage Open at the last page instead of the first.
  * @param onPageChanged   Invoked (1-based currentPage, totalPages) after every turn.
  * @param onReachStart    Invoked when the user tries to go before page 1.
@@ -136,137 +66,181 @@ fun PageCurlContainer(
     onReachEnd: () -> Unit = {},
     onTap: () -> Unit = {}
 ) {
-    val scope     = rememberCoroutineScope()
+    val scope = rememberCoroutineScope()
     val pageCount = pages.size
+    val bgArgb = backgroundColor.toArgb()
 
     var currentPage by remember(pageCount, startFromLastPage) {
         mutableIntStateOf(if (startFromLastPage && pageCount > 0) pageCount - 1 else 0)
     }
 
-    // curlProgress: 0 = not curled, 1 = fully turned
-    val curlProgress    = remember { Animatable(0f) }
-    var curlForward     by remember { mutableStateOf(true) }
-    // Normalised Y (0=top, 1=bottom) where the drag started; drives the fold slope.
-    var dragStartNormY  by remember { mutableFloatStateOf(0.5f) }
+    // Page dimensions (in pixels)
+    var pageW by remember { mutableFloatStateOf(0f) }
+    var pageH by remember { mutableFloatStateOf(0f) }
 
-    val renderState = remember { PageCurlRenderState() }
-    val nativePtr   = remember { AtomicLong(PageCurlJNI.nativeCreate()) }
+    // ---- Curl state ----
+    // The position of the page corner being dragged (null = no curl active)
+    var dragCorner by remember { mutableStateOf<PointF?>(null) }
+    var curlForward by remember { mutableStateOf(true) }
 
-    // Report initial page count
+    // Animation state
+    val animProgress = remember { Animatable(0f) }
+    var animStartPt by remember { mutableStateOf(PointF(0f, 0f)) }
+    var animEndPt by remember { mutableStateOf(PointF(0f, 0f)) }
+    var isAnimCompleting by remember { mutableStateOf(false) }
+
+    // Report page changes
     LaunchedEffect(currentPage, pageCount) {
         if (pageCount > 0) onPageChanged(currentPage + 1, pageCount)
     }
 
-    // Push background color to render state
-    LaunchedEffect(backgroundColor) {
-        renderState.bgColor = backgroundColor.toArgb()
-    }
-
-    // Upload bitmaps to render state whenever pages change
-    LaunchedEffect(pages, currentPage) {
-        if (pages.isEmpty()) return@LaunchedEffect
-        // Upload current, next, prev
-        fun enqueue(slot: Int, index: Int) {
-            pages.getOrNull(index)?.let { renderState.pendingTextures.add(Pair(slot, it)) }
-        }
-        enqueue(PageCurlJNI.TEX_CURRENT, currentPage)
-        enqueue(PageCurlJNI.TEX_NEXT,    currentPage + 1)
-        enqueue(PageCurlJNI.TEX_PREV,    currentPage - 1)
-    }
-
-    // Bridge Compose animation state → GL render state
-    LaunchedEffect(Unit) {
-        snapshotFlow { Triple(curlProgress.value, curlForward, dragStartNormY) }
-            .collect { (progress, forward, startNormY) ->
-                renderState.isForward = forward
-                renderState.foldX = if (forward) 1.0f - progress else progress
-
-                // Slope flattens toward 0 as the page turn completes, so the fold
-                // becomes vertical by the time it exits (matching iOS behaviour).
-                val initialSlope   = (startNormY - 0.5f) * 0.8f
-                renderState.foldSlope = initialSlope * (1f - progress)
-            }
-    }
-
-    // Cleanup native renderer when Composable leaves composition
-    DisposableEffect(Unit) {
-        onDispose {
-            val ptr = nativePtr.getAndSet(0L)
-            if (ptr != 0L) {
-                // nativeDestroy must be called on the GL thread; GLSurfaceView handles
-                // queueing via queueEvent. Store pointer temporarily for the view to call.
-                PageCurlJNI.nativeDestroy(ptr)
-            }
-        }
-    }
-
-    // Animation helpers
+    // ---- Animation helpers ----
     fun animateToComplete(forward: Boolean) {
         scope.launch {
-            // Smooth ease-in-out curve matching iOS page curl completion animation
-            curlProgress.animateTo(1f, tween(durationMillis = 300, easing = FastOutSlowInEasing))
+            isAnimCompleting = true
+            animProgress.snapTo(0f)
+            animProgress.animateTo(
+                1f,
+                tween(durationMillis = 300, easing = FastOutSlowInEasing)
+            )
             if (forward) {
                 if (currentPage < pageCount - 1) currentPage++ else onReachEnd()
             } else {
                 if (currentPage > 0) currentPage-- else onReachStart()
             }
-            curlProgress.snapTo(0f)
+            dragCorner = null
+            isAnimCompleting = false
         }
     }
 
     fun animateToCancel() {
         scope.launch {
-            // Higher stiffness for a snappy snap-back, still no bounce
-            curlProgress.animateTo(0f, spring(Spring.DampingRatioNoBouncy, Spring.StiffnessHigh))
+            isAnimCompleting = false
+            animProgress.snapTo(0f)
+            animProgress.animateTo(
+                1f,
+                spring(Spring.DampingRatioNoBouncy, Spring.StiffnessHigh)
+            )
+            dragCorner = null
         }
     }
 
-    Box(
+    // Reusable Paint objects (avoid allocation per frame)
+    val bitmapPaint = remember { Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG) }
+    val backFacePaint = remember {
+        Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG).apply {
+            alpha = BACK_FACE_CONTENT_ALPHA
+        }
+    }
+    val backOverlayPaint = remember {
+        Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = android.graphics.Color.argb(BACK_FACE_OVERLAY_ALPHA, 255, 255, 255)
+            style = Paint.Style.FILL
+        }
+    }
+    val shadowPaint = remember { Paint(Paint.ANTI_ALIAS_FLAG) }
+
+    // ---- Canvas rendering ----
+    androidx.compose.foundation.Canvas(
         modifier = modifier
             .fillMaxSize()
-            .onSizeChanged { /* size observed inside AndroidView */ }
+            .onSizeChanged { size ->
+                pageW = size.width.toFloat()
+                pageH = size.height.toFloat()
+            }
+            // Drag gesture
             .pointerInput(pageCount, currentPage) {
                 val velocityTracker = VelocityTracker()
                 detectDragGestures(
                     onDragStart = { startOffset ->
                         velocityTracker.resetTracking()
-                        curlForward    = startOffset.x > size.width / 2
-                        dragStartNormY = if (size.height > 0) startOffset.y / size.height else 0.5f
-                        scope.launch { curlProgress.snapTo(0f) }
+                        curlForward = startOffset.x > size.width / 2
+
+                        // Corner starts at the page edge
+                        val cornerX = if (curlForward) size.width.toFloat() else 0f
+                        val cornerY = if (startOffset.y > size.height / 2) {
+                            size.height.toFloat()
+                        } else {
+                            0f
+                        }
+                        dragCorner = PointF(cornerX, cornerY)
                     },
                     onDrag = { change, dragAmount ->
                         change.consume()
                         velocityTracker.addPosition(change.uptimeMillis, change.position)
-                        val w = size.width.toFloat()
-                        if (w > 0) {
-                            val delta = if (curlForward) -dragAmount.x / w else dragAmount.x / w
-                            scope.launch {
-                                curlProgress.snapTo((curlProgress.value + delta).coerceIn(0f, 1f))
-                            }
+
+                        dragCorner?.let { cp ->
+                            dragCorner = PointF(
+                                (cp.x + dragAmount.x).coerceIn(
+                                    -size.width * 0.15f,
+                                    size.width * 1.15f
+                                ),
+                                (cp.y + dragAmount.y).coerceIn(
+                                    -size.height * 0.15f,
+                                    size.height * 1.15f
+                                )
+                            )
                         }
                     },
                     onDragEnd = {
-                        val vel = try { velocityTracker.calculateVelocity() } catch (_: Exception) { null }
-                        val vx  = vel?.x ?: 0f
-                        val p   = curlProgress.value
+                        val vel = try {
+                            velocityTracker.calculateVelocity()
+                        } catch (_: Exception) {
+                            null
+                        }
+                        val vx = vel?.x ?: 0f
+                        val cp = dragCorner ?: return@detectDragGestures
+
+                        // Progress: how far the corner has moved from its origin
+                        val progress = if (curlForward) {
+                            (size.width - cp.x) / size.width
+                        } else {
+                            cp.x / size.width
+                        }
 
                         val shouldComplete = if (abs(vx) > VELOCITY_THRESHOLD) {
                             if (curlForward) vx < 0 else vx > 0
                         } else {
-                            p > COMPLETION_THRESHOLD
+                            progress > COMPLETION_THRESHOLD
                         }
 
-                        val canTurn = if (curlForward) currentPage < pageCount - 1 else currentPage > 0
+                        val canTurn = if (curlForward) {
+                            currentPage < pageCount - 1
+                        } else {
+                            currentPage > 0
+                        }
 
-                        if (shouldComplete && (canTurn || p > COMPLETION_THRESHOLD)) {
+                        // Set up animation endpoints
+                        animStartPt = PointF(cp.x, cp.y)
+                        if (shouldComplete && canTurn) {
+                            animEndPt = if (curlForward) {
+                                PointF(-size.width * 0.3f, cp.y * 0.5f + size.height * 0.25f)
+                            } else {
+                                PointF(size.width * 1.3f, cp.y * 0.5f + size.height * 0.25f)
+                            }
                             animateToComplete(curlForward)
                         } else {
+                            val originX = if (curlForward) size.width.toFloat() else 0f
+                            val originY = if (cp.y > size.height / 2) {
+                                size.height.toFloat()
+                            } else {
+                                0f
+                            }
+                            animEndPt = PointF(originX, originY)
                             animateToCancel()
                         }
                     },
-                    onDragCancel = { animateToCancel() }
+                    onDragCancel = {
+                        val cp = dragCorner ?: return@detectDragGestures
+                        animStartPt = PointF(cp.x, cp.y)
+                        val originX = if (curlForward) pageW else 0f
+                        val originY = if (cp.y > pageH / 2) pageH else 0f
+                        animEndPt = PointF(originX, originY)
+                        animateToCancel()
+                    }
                 )
             }
+            // Tap gesture
             .pointerInput(pageCount, currentPage) {
                 detectTapGestures(
                     onTap = { offset ->
@@ -274,41 +248,150 @@ fun PageCurlContainer(
                         when {
                             offset.x < third -> {
                                 if (currentPage > 0) {
-                                    dragStartNormY = 0.5f   // vertical fold for taps
-                                    curlForward    = false
+                                    curlForward = false
+                                    animStartPt = PointF(0f, size.height.toFloat())
+                                    animEndPt = PointF(
+                                        size.width * 1.3f,
+                                        size.height * 0.25f
+                                    )
                                     animateToComplete(false)
                                 } else {
                                     onReachStart()
                                 }
                             }
+
                             offset.x > third * 2 -> {
                                 if (currentPage < pageCount - 1) {
-                                    dragStartNormY = 0.5f   // vertical fold for taps
-                                    curlForward    = true
+                                    curlForward = true
+                                    animStartPt = PointF(
+                                        size.width.toFloat(),
+                                        size.height.toFloat()
+                                    )
+                                    animEndPt = PointF(
+                                        -size.width * 0.3f,
+                                        size.height * 0.25f
+                                    )
                                     animateToComplete(true)
                                 } else {
                                     onReachEnd()
                                 }
                             }
+
                             else -> onTap()
                         }
                     }
                 )
             }
     ) {
-        AndroidView(
-            modifier = Modifier.fillMaxSize(),
-            factory = { ctx ->
-                val renderer = PageCurlGLRenderer(renderState, nativePtr)
-                GLSurfaceView(ctx).apply {
-                    setEGLContextClientVersion(3)
-                    setRenderer(renderer)
-                    renderMode = GLSurfaceView.RENDERMODE_CONTINUOUSLY
+        drawIntoCanvas { canvas ->
+            val nc = canvas.nativeCanvas
+            val w = size.width
+            val h = size.height
+            val dst = RectF(0f, 0f, w, h)
+
+            nc.drawColor(bgArgb)
+
+            if (pages.isEmpty() || w <= 0f || h <= 0f) return@drawIntoCanvas
+
+            // Compute effective corner position from drag or animation
+            val effectiveCorner: PointF? = when {
+                dragCorner != null && !animProgress.isRunning -> dragCorner
+                animProgress.isRunning -> {
+                    val t = animProgress.value
+                    PointF(
+                        animStartPt.x + (animEndPt.x - animStartPt.x) * t,
+                        animStartPt.y + (animEndPt.y - animStartPt.y) * t
+                    )
                 }
-            },
-            update = { glView ->
-                glView.requestRender()
+
+                else -> null
             }
-        )
+
+            if (effectiveCorner == null) {
+                // No curl: draw current page flat
+                pages.getOrNull(currentPage)?.let { bmp ->
+                    nc.drawBitmap(bmp, null, dst, bitmapPaint)
+                }
+                return@drawIntoCanvas
+            }
+
+            // Determine the original corner position
+            val originCorner = if (curlForward) {
+                val cy = if (effectiveCorner.y < h / 2) 0f else h
+                PointF(w, cy)
+            } else {
+                val cy = if (effectiveCorner.y < h / 2) 0f else h
+                PointF(0f, cy)
+            }
+
+            // Calculate fold geometry
+            val frame = CurlMath.calculate(effectiveCorner, originCorner, w, h)
+
+            if (!frame.isVisible) {
+                // Fold line outside page — just draw flat
+                pages.getOrNull(currentPage)?.let { bmp ->
+                    nc.drawBitmap(bmp, null, dst, bitmapPaint)
+                }
+                return@drawIntoCanvas
+            }
+
+            // ---- 5-layer rendering ----
+
+            // Layer 1: Revealed page (next or prev) — drawn full underneath
+            val revealedBmp = if (curlForward) {
+                pages.getOrNull(currentPage + 1)
+            } else {
+                pages.getOrNull(currentPage - 1)
+            }
+            if (revealedBmp != null) {
+                nc.save()
+                nc.clipPath(frame.backPath)
+                nc.drawBitmap(revealedBmp, null, dst, bitmapPaint)
+                nc.restore()
+            }
+
+            // Layer 2: Cast shadow on revealed page (along fold line, curl side)
+            if (frame.castShadowGradient != null && !frame.shadowRegionPath.isEmpty) {
+                shadowPaint.shader = frame.castShadowGradient
+                nc.save()
+                nc.clipPath(frame.shadowRegionPath)
+                nc.drawRect(0f, 0f, w, h, shadowPaint)
+                nc.restore()
+                shadowPaint.shader = null
+            }
+
+            // Layer 3: Flat part of current page (front face, uncurled)
+            pages.getOrNull(currentPage)?.let { bmp ->
+                nc.save()
+                nc.clipPath(frame.flatPath)
+                nc.drawBitmap(bmp, null, dst, bitmapPaint)
+                nc.restore()
+            }
+
+            // Layer 4: Crease shadow on flat page (along fold line, flat side)
+            if (frame.creaseShadowGradient != null && !frame.creaseRegionPath.isEmpty) {
+                shadowPaint.shader = frame.creaseShadowGradient
+                nc.save()
+                nc.clipPath(frame.creaseRegionPath)
+                nc.drawRect(0f, 0f, w, h, shadowPaint)
+                nc.restore()
+                shadowPaint.shader = null
+            }
+
+            // Layer 5: Back face of curled page (reflected across fold line)
+            pages.getOrNull(currentPage)?.let { bmp ->
+                nc.save()
+                nc.clipPath(frame.backPath)
+                nc.concat(frame.backMatrix)
+                nc.drawBitmap(bmp, null, dst, backFacePaint)
+                nc.restore()
+
+                // Paper-back white overlay for realistic look
+                nc.save()
+                nc.clipPath(frame.backPath)
+                nc.drawRect(0f, 0f, w, h, backOverlayPaint)
+                nc.restore()
+            }
+        }
     }
 }

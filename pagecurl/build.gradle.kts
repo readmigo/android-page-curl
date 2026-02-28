@@ -13,14 +13,6 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         consumerProguardFiles("consumer-rules.pro")
 
-        ndk {
-            abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64", "x86")
-        }
-        externalNativeBuild {
-            cmake {
-                cppFlags += "-std=c++17"
-            }
-        }
     }
 
     buildTypes {
@@ -47,14 +39,6 @@ android {
         kotlinCompilerExtensionVersion = "1.5.10"
     }
 
-    ndkVersion = "27.0.12077973"
-
-    externalNativeBuild {
-        cmake {
-            path = file("src/main/cpp/CMakeLists.txt")
-            version = "3.22.1"
-        }
-    }
 }
 
 dependencies {
@@ -78,7 +62,7 @@ afterEvaluate {
 
                 pom {
                     name.set("android-page-curl")
-                    description.set("Realistic OpenGL ES 3.0 page-curl animation library for Jetpack Compose")
+                    description.set("Realistic Canvas-based page-curl animation library for Jetpack Compose")
                     url.set("https://github.com/readmigo/android-page-curl")
                     licenses {
                         license {
