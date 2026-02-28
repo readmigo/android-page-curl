@@ -38,9 +38,9 @@ private const val COMPLETION_THRESHOLD = 0.35f
 private const val VELOCITY_THRESHOLD = 500f
 
 // Back-face rendering: opacity of the mirrored page content (0-255)
-private const val BACK_FACE_CONTENT_ALPHA = 180
+private const val BACK_FACE_CONTENT_ALPHA = 255
 // Back-face rendering: semi-transparent white overlay for paper-back look
-private const val BACK_FACE_OVERLAY_ALPHA = 50
+private const val BACK_FACE_OVERLAY_ALPHA = 90
 
 /**
  * A realistic Canvas-based page-curl container for Jetpack Compose.
@@ -413,19 +413,31 @@ fun PageCurlContainer(
                 shadowPaint.shader = null
             }
 
-            // Layer 5: Back face of curled page (reflected across fold line)
-            pages.getOrNull(currentPage)?.let { bmp ->
-                nc.save()
-                nc.clipPath(frame.backPath)
-                nc.concat(frame.backMatrix)
-                nc.drawBitmap(bmp, null, dst, backFacePaint)
-                nc.restore()
+            // Layer 5: Back face of curled page (full curl region — flat paper being turned)
+            if (!frame.backPath.isEmpty) {
+                pages.getOrNull(currentPage)?.let { bmp ->
+                    nc.save()
+                    nc.clipPath(frame.backPath)
+                    nc.concat(frame.backMatrix)
+                    nc.drawBitmap(bmp, null, dst, backFacePaint)
+                    nc.restore()
 
-                // Paper-back white overlay for realistic look
-                nc.save()
-                nc.clipPath(frame.backPath)
-                nc.drawRect(0f, 0f, w, h, backOverlayPaint)
-                nc.restore()
+                    // Paper-back white overlay for realistic look
+                    nc.save()
+                    nc.clipPath(frame.backPath)
+                    nc.drawRect(0f, 0f, w, h, backOverlayPaint)
+                    nc.restore()
+                }
+
+                // Layer 6: Curl cylinder highlight gradient (3D illusion)
+                if (frame.curlHighlightGradient != null) {
+                    shadowPaint.shader = frame.curlHighlightGradient
+                    nc.save()
+                    nc.clipPath(frame.curlStripPath)
+                    nc.drawRect(0f, 0f, w, h, shadowPaint)
+                    nc.restore()
+                    shadowPaint.shader = null
+                }
             }
         }
     }

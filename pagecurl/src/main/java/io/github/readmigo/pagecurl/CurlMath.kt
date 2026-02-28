@@ -30,6 +30,10 @@ internal class CurlFrame(
     val shadowRegionPath: Path,
     /** Region where the crease shadow is drawn (strip on flat side of fold). */
     val creaseRegionPath: Path,
+    /** Narrow strip along the fold line representing the visible curl cylinder. */
+    val curlStripPath: Path,
+    /** Gradient overlay on the curl strip for 3D cylinder illusion. */
+    val curlHighlightGradient: LinearGradient?,
     /** Whether a curl is actually visible (false = page is fully flat). */
     val isVisible: Boolean
 )
@@ -46,10 +50,11 @@ internal class CurlFrame(
  */
 internal object CurlMath {
 
-    private const val CAST_SHADOW_FRACTION = 0.07f   // shadow width as fraction of page width
-    private const val CREASE_SHADOW_FRACTION = 0.04f  // crease width as fraction of page width
-    private const val CAST_SHADOW_ALPHA = 70          // max shadow opacity (0-255)
-    private const val CREASE_SHADOW_ALPHA = 35        // max crease opacity (0-255)
+    private const val CAST_SHADOW_FRACTION = 0.15f   // shadow width as fraction of page width
+    private const val CREASE_SHADOW_FRACTION = 0.06f  // crease width as fraction of page width
+    private const val CAST_SHADOW_ALPHA = 80          // max shadow opacity (0-255)
+    private const val CREASE_SHADOW_ALPHA = 50        // max crease opacity (0-255)
+    private const val CURL_STRIP_FRACTION = 0.08f     // curl cylinder width as fraction of page width
 
     /**
      * Calculate the complete curl geometry for one frame.
@@ -147,6 +152,25 @@ internal object CurlMath {
             mx, my, -nx, -ny, fldx, fldy, creaseShadowW, pageW, pageH
         )
 
+        // Curl strip: narrow band on curl side representing the visible curl cylinder
+        val curlStripW = pageW * CURL_STRIP_FRACTION
+        val curlStripPath = buildShadowStrip(
+            mx, my, nx, ny, fldx, fldy, curlStripW, pageW, pageH
+        )
+
+        // Highlight gradient for 3D cylinder illusion on the curl strip
+        val curlHighlightGradient = LinearGradient(
+            mx, my,
+            mx + nx * curlStripW, my + ny * curlStripW,
+            intArrayOf(
+                android.graphics.Color.argb(60, 255, 255, 255),  // bright at fold edge
+                android.graphics.Color.argb(0, 128, 128, 128),   // neutral center
+                android.graphics.Color.argb(80, 0, 0, 0)         // shadow at outer edge
+            ),
+            floatArrayOf(0f, 0.35f, 1f),
+            Shader.TileMode.CLAMP
+        )
+
         return CurlFrame(
             flatPath = flatPath,
             backPath = curlPath,
@@ -155,6 +179,8 @@ internal object CurlMath {
             creaseShadowGradient = creaseShadowGradient,
             shadowRegionPath = shadowRegion,
             creaseRegionPath = creaseRegion,
+            curlStripPath = curlStripPath,
+            curlHighlightGradient = curlHighlightGradient,
             isVisible = true
         )
     }
@@ -170,6 +196,8 @@ internal object CurlMath {
             creaseShadowGradient = null,
             shadowRegionPath = Path(),
             creaseRegionPath = Path(),
+            curlStripPath = Path(),
+            curlHighlightGradient = null,
             isVisible = false
         )
     }
