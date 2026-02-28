@@ -11,8 +11,8 @@ public:
     static constexpr int TEX_NEXT    = 1;
     static constexpr int TEX_PREV    = 2;
 
-    // Cylinder radius as a fraction of page width (~8%)
-    static constexpr float CURL_RADIUS = 0.08f;
+    // Cylinder radius as a fraction of page width (~6.5%, tighter curl to match iOS)
+    static constexpr float CURL_RADIUS = 0.065f;
 
     // Mesh subdivisions — 64 columns for horizontal smoothness, 32 rows for
     // vertical resolution required by the diagonal fold line.

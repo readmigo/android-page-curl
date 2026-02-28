@@ -5,6 +5,8 @@ import android.opengl.GLSurfaceView
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
@@ -201,8 +203,8 @@ fun PageCurlContainer(
     // Animation helpers
     fun animateToComplete(forward: Boolean) {
         scope.launch {
-            // NoBouncy: paper doesn't spring back — smooth, damped completion
-            curlProgress.animateTo(1f, spring(Spring.DampingRatioNoBouncy, Spring.StiffnessMedium))
+            // Smooth ease-in-out curve matching iOS page curl completion animation
+            curlProgress.animateTo(1f, tween(durationMillis = 300, easing = FastOutSlowInEasing))
             if (forward) {
                 if (currentPage < pageCount - 1) currentPage++ else onReachEnd()
             } else {

@@ -32,6 +32,7 @@ uniform float uDarken;     // max darken amount for curl shading
 
 out vec2  vUV;
 out float vShadow;
+out float vEdge;            // paper edge highlight intensity
 
 const float PI = 3.14159265;
 
@@ -39,6 +40,7 @@ void main() {
     vec2  pos = aPos;
     vec2  uv  = aUV;
     float z   = 0.0;
+    vEdge     = 0.0;
 
     // Diagonal fold line x at this vertex's y position
     float foldLineX = uFoldX + uFoldSlope * (pos.y - 0.5);
@@ -58,6 +60,10 @@ void main() {
 
         // Shadow peaks at theta = PI/2 (90° — edge of cylinder)
         vShadow = uDarken * sin(theta);
+
+        // Paper edge highlight: bright strip right at the fold line (theta near 0)
+        // Narrow Gaussian-like falloff for a subtle crease highlight (iOS style)
+        vEdge = exp(-theta * theta * 18.0);
     } else {
         vShadow = 0.0;
     }
@@ -76,6 +82,7 @@ precision mediump float;
 
 in  vec2  vUV;
 in  float vShadow;
+in  float vEdge;
 
 uniform sampler2D uTex;
 
@@ -83,8 +90,11 @@ out vec4 fragColor;
 
 void main() {
     vec4 color = texture(uTex, vUV);
-    color.rgb *= (1.0 - vShadow * 0.45);
-    fragColor   = color;
+    // Curl shadow (darkening on the curved surface)
+    color.rgb *= (1.0 - vShadow * 0.40);
+    // Paper edge highlight: subtle white crease at the fold line (iOS style)
+    color.rgb = mix(color.rgb, vec3(1.0), vEdge * 0.18);
+    fragColor = color;
 }
 )GLSL";
 
@@ -275,10 +285,10 @@ void PageCurlRenderer::onSurfaceCreated() {
     glBindTexture(GL_TEXTURE_2D, 0);
 
     // Pre-allocate shadow gradient textures (created once, reused every frame)
-    // Reveal shadow: dark (alpha 140) on the left → transparent on the right
-    mRevealShadowTex = createGradientTex(0, 0, 0, 140,  0, 0, 0, 0);
-    // Flat shadow: transparent on the left → dark (alpha 80) on the right
-    mFlatShadowTex   = createGradientTex(0, 0, 0, 0,    0, 0, 0, 80);
+    // Reveal shadow: softer, wider gradient to match iOS page curl appearance
+    mRevealShadowTex = createGradientTex(0, 0, 0, 90,   0, 0, 0, 0);
+    // Flat shadow: subtle gradient on the uncurled page (iOS style)
+    mFlatShadowTex   = createGradientTex(0, 0, 0, 0,    0, 0, 0, 40);
 
     buildMesh();
     LOGI("onSurfaceCreated done");
@@ -397,8 +407,8 @@ static void drawShadowQuad(GLuint flatProgram, GLint uFlatTex, GLuint shadowTex,
 
 void PageCurlRenderer::drawRevealShadow(float foldX, float foldSlope) {
     // Shadow strip to the RIGHT of the diagonal fold line (on the revealed page).
-    // Width: 8% of page — wider than before for a more prominent depth cue.
-    const float w    = 0.08f;
+    // Width: 12% — wider, softer gradient to match iOS page curl shadow.
+    const float w    = 0.12f;
     float topFold    = foldX - 0.5f * foldSlope;   // fold line x at y=0 (top)
     float botFold    = foldX + 0.5f * foldSlope;   // fold line x at y=1 (bottom)
     drawShadowQuad(mFlatProgram, mUFlatTex, mRevealShadowTex,
@@ -408,8 +418,8 @@ void PageCurlRenderer::drawRevealShadow(float foldX, float foldSlope) {
 
 void PageCurlRenderer::drawFlatShadow(float foldX, float foldSlope) {
     // Shadow strip to the LEFT of the diagonal fold line (on the uncurled page).
-    // Width: 6% of page.
-    const float w    = 0.06f;
+    // Width: 10% — wider, subtler gradient to match iOS page curl shadow.
+    const float w    = 0.10f;
     float topFold    = foldX - 0.5f * foldSlope;
     float botFold    = foldX + 0.5f * foldSlope;
     drawShadowQuad(mFlatProgram, mUFlatTex, mFlatShadowTex,
@@ -432,11 +442,11 @@ void PageCurlRenderer::drawForward(float foldX, float foldSlope) {
     // 2. Shadow cast on the revealed next page (follows diagonal fold line)
     drawRevealShadow(foldX, foldSlope);
 
-    // 3. Current page — back face (paper back, lightly darkened)
-    drawCurl(TEX_CURRENT, foldX, foldSlope, /*backFace=*/true, /*darken=*/0.15f);
+    // 3. Current page — back face (paper back, heavily faded to simulate blank paper back — iOS style)
+    drawCurl(TEX_CURRENT, foldX, foldSlope, /*backFace=*/true, /*darken=*/0.55f);
 
-    // 4. Current page — front face (the page content peeling away)
-    drawCurl(TEX_CURRENT, foldX, foldSlope, /*backFace=*/false, /*darken=*/0.35f);
+    // 4. Current page — front face (the page content peeling away, softer shadow — iOS style)
+    drawCurl(TEX_CURRENT, foldX, foldSlope, /*backFace=*/false, /*darken=*/0.25f);
 
     // 5. Shadow on the still-flat portion of current page
     drawFlatShadow(foldX, foldSlope);
@@ -453,13 +463,13 @@ void PageCurlRenderer::drawBackward(float foldX, float foldSlope) {
     // 2. Shadow on the current page
     drawRevealShadow(foldX, foldSlope);
 
-    // 3. Previous page — back face (mirrored fold for left-side peel)
+    // 3. Previous page — back face (mirrored fold for left-side peel, paper back — iOS style)
     float mirrorFoldX   = 1.0f - foldX;
     float mirrorSlope   = -foldSlope;   // negate slope when mirroring X axis
-    drawCurl(TEX_PREV, mirrorFoldX, mirrorSlope, /*backFace=*/true,  /*darken=*/0.15f);
+    drawCurl(TEX_PREV, mirrorFoldX, mirrorSlope, /*backFace=*/true,  /*darken=*/0.55f);
 
-    // 4. Previous page — front face
-    drawCurl(TEX_PREV, mirrorFoldX, mirrorSlope, /*backFace=*/false, /*darken=*/0.35f);
+    // 4. Previous page — front face (softer shadow — iOS style)
+    drawCurl(TEX_PREV, mirrorFoldX, mirrorSlope, /*backFace=*/false, /*darken=*/0.25f);
 
     // 5. Shadow on the prev page flat portion
     drawFlatShadow(mirrorFoldX, mirrorSlope);
