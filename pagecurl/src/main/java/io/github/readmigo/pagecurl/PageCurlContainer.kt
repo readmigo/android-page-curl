@@ -13,6 +13,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -43,13 +44,14 @@ private const val VELOCITY_THRESHOLD   = 500f
 private class PageCurlRenderState {
     /** Normalized fold position [0,1]: 1.0 = fully flat, 0.0 = fully turned (forward). */
     @Volatile var foldX: Float = 1.0f
+    /** Diagonal tilt of fold line; 0 = vertical, positive = bottom-right corner peels first. */
+    @Volatile var foldSlope: Float = 0.0f
     /** True = forward curl (right-to-left), false = backward curl (left-to-right). */
     @Volatile var isForward: Boolean = true
     /** Background color ARGB for GL clear. */
     @Volatile var bgColor: Int = android.graphics.Color.WHITE
 
     // Bitmaps queued for upload to the GL thread.
-    // Triple<slot, bitmap, generationId>
     val pendingTextures: ConcurrentLinkedQueue<Pair<Int, Bitmap>> = ConcurrentLinkedQueue()
 }
 
@@ -91,14 +93,14 @@ private class PageCurlGLRenderer(
             }
         }
 
-        val foldX    = state.foldX
-        val forward  = state.isForward
+        val foldX     = state.foldX
+        val foldSlope = state.foldSlope
+        val forward   = state.isForward
 
         if (forward) {
-            PageCurlJNI.nativeDrawForward(ptr, foldX)
+            PageCurlJNI.nativeDrawForward(ptr, foldX, foldSlope)
         } else {
-            // For backward curl foldX encodes progress from 0→1 (fold moves left→right)
-            PageCurlJNI.nativeDrawBackward(ptr, foldX)
+            PageCurlJNI.nativeDrawBackward(ptr, foldX, foldSlope)
         }
     }
 }
@@ -140,8 +142,10 @@ fun PageCurlContainer(
     }
 
     // curlProgress: 0 = not curled, 1 = fully turned
-    val curlProgress = remember { Animatable(0f) }
-    var curlForward  by remember { mutableStateOf(true) }
+    val curlProgress    = remember { Animatable(0f) }
+    var curlForward     by remember { mutableStateOf(true) }
+    // Normalised Y (0=top, 1=bottom) where the drag started; drives the fold slope.
+    var dragStartNormY  by remember { mutableFloatStateOf(0.5f) }
 
     val renderState = remember { PageCurlRenderState() }
     val nativePtr   = remember { AtomicLong(PageCurlJNI.nativeCreate()) }
@@ -170,16 +174,16 @@ fun PageCurlContainer(
 
     // Bridge Compose animation state → GL render state
     LaunchedEffect(Unit) {
-        snapshotFlow { Pair(curlProgress.value, curlForward) }.collect { (progress, forward) ->
-            renderState.isForward = forward
-            renderState.foldX = if (forward) {
-                // Forward: foldX goes 1.0 → 0.0 as progress goes 0 → 1
-                1.0f - progress
-            } else {
-                // Backward: foldX goes 0.0 → 1.0 as progress goes 0 → 1
-                progress
+        snapshotFlow { Triple(curlProgress.value, curlForward, dragStartNormY) }
+            .collect { (progress, forward, startNormY) ->
+                renderState.isForward = forward
+                renderState.foldX = if (forward) 1.0f - progress else progress
+
+                // Slope flattens toward 0 as the page turn completes, so the fold
+                // becomes vertical by the time it exits (matching iOS behaviour).
+                val initialSlope   = (startNormY - 0.5f) * 0.8f
+                renderState.foldSlope = initialSlope * (1f - progress)
             }
-        }
     }
 
     // Cleanup native renderer when Composable leaves composition
@@ -197,7 +201,8 @@ fun PageCurlContainer(
     // Animation helpers
     fun animateToComplete(forward: Boolean) {
         scope.launch {
-            curlProgress.animateTo(1f, spring(Spring.DampingRatioMediumBouncy, Spring.StiffnessMedium))
+            // NoBouncy: paper doesn't spring back — smooth, damped completion
+            curlProgress.animateTo(1f, spring(Spring.DampingRatioNoBouncy, Spring.StiffnessMedium))
             if (forward) {
                 if (currentPage < pageCount - 1) currentPage++ else onReachEnd()
             } else {
@@ -209,7 +214,8 @@ fun PageCurlContainer(
 
     fun animateToCancel() {
         scope.launch {
-            curlProgress.animateTo(0f, spring(Spring.DampingRatioMediumBouncy, Spring.StiffnessMedium))
+            // Higher stiffness for a snappy snap-back, still no bounce
+            curlProgress.animateTo(0f, spring(Spring.DampingRatioNoBouncy, Spring.StiffnessHigh))
         }
     }
 
@@ -222,7 +228,8 @@ fun PageCurlContainer(
                 detectDragGestures(
                     onDragStart = { startOffset ->
                         velocityTracker.resetTracking()
-                        curlForward = startOffset.x > size.width / 2
+                        curlForward    = startOffset.x > size.width / 2
+                        dragStartNormY = if (size.height > 0) startOffset.y / size.height else 0.5f
                         scope.launch { curlProgress.snapTo(0f) }
                     },
                     onDrag = { change, dragAmount ->
@@ -265,7 +272,8 @@ fun PageCurlContainer(
                         when {
                             offset.x < third -> {
                                 if (currentPage > 0) {
-                                    curlForward = false
+                                    dragStartNormY = 0.5f   // vertical fold for taps
+                                    curlForward    = false
                                     animateToComplete(false)
                                 } else {
                                     onReachStart()
@@ -273,7 +281,8 @@ fun PageCurlContainer(
                             }
                             offset.x > third * 2 -> {
                                 if (currentPage < pageCount - 1) {
-                                    curlForward = true
+                                    dragStartNormY = 0.5f   // vertical fold for taps
+                                    curlForward    = true
                                     animateToComplete(true)
                                 } else {
                                     onReachEnd()

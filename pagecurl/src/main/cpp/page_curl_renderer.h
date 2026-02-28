@@ -14,9 +14,10 @@ public:
     // Cylinder radius as a fraction of page width (~8%)
     static constexpr float CURL_RADIUS = 0.08f;
 
-    // Mesh subdivisions along x-axis for smooth cylinder
+    // Mesh subdivisions — 64 columns for horizontal smoothness, 32 rows for
+    // vertical resolution required by the diagonal fold line.
     static constexpr int MESH_COLS = 64;
-    static constexpr int MESH_ROWS = 2;
+    static constexpr int MESH_ROWS = 32;
 
     PageCurlRenderer();
     ~PageCurlRenderer();
@@ -32,12 +33,14 @@ public:
     void setTexture(int slot, const uint8_t* rgba, int texWidth, int texHeight);
 
     // Draw a forward curl: current page curls from right to left, revealing next page.
-    // foldX is the normalized fold-line x position [0.0, 1.0]; 1.0 = no curl, 0.0 = fully turned.
-    void drawForward(float foldX);
+    // foldX:    normalized fold-line x position [0.0, 1.0]; 1.0 = no curl, 0.0 = fully turned.
+    // foldSlope: diagonal tilt of the fold line; 0 = vertical, positive = bottom-right corner peels first.
+    void drawForward(float foldX, float foldSlope = 0.0f);
 
     // Draw a backward curl: previous page slides in from left, covering current page.
-    // foldX is the normalized fold-line x position [0.0, 1.0]; 0.0 = no curl, 1.0 = fully turned.
-    void drawBackward(float foldX);
+    // foldX:    normalized fold-line x position [0.0, 1.0]; 0.0 = no curl, 1.0 = fully turned.
+    // foldSlope: diagonal tilt (mirrored internally for the left-side fold).
+    void drawBackward(float foldX, float foldSlope = 0.0f);
 
     // Release all GL resources. Must be called on the GL thread.
     void release();
@@ -53,14 +56,19 @@ private:
     int    mSurfaceH     = 0;
 
     // Uniform locations for mProgram (curl)
-    GLint mUFoldX    = -1;
-    GLint mURadius   = -1;
-    GLint mUBackFace = -1;
-    GLint mUDarken   = -1;
-    GLint mUTex      = -1;
+    GLint mUFoldX     = -1;
+    GLint mUFoldSlope = -1;
+    GLint mURadius    = -1;
+    GLint mUBackFace  = -1;
+    GLint mUDarken    = -1;
+    GLint mUTex       = -1;
 
     // Uniform location for mFlatProgram
-    GLint mUFlatTex  = -1;
+    GLint mUFlatTex   = -1;
+
+    // Pre-allocated shadow gradient textures (created once in onSurfaceCreated)
+    GLuint mRevealShadowTex = 0;
+    GLuint mFlatShadowTex   = 0;
 
     void buildMesh();
     GLuint compileShader(GLenum type, const char* src);
@@ -70,13 +78,18 @@ private:
     void drawFlat(int texSlot);
 
     // Draw the page mesh with cylindrical curl applied in the vertex shader.
-    // backFace: render with GL_FRONT culled (show back side of the curl).
-    // darken:   0.0 = no darkening, 1.0 = max darkening on back face.
-    void drawCurl(int texSlot, float foldX, bool backFace, float darken);
+    // backFace:  render with GL_FRONT culled (show back side of the curl).
+    // darken:    0.0 = no darkening, 1.0 = max darkening on back face.
+    // foldSlope: diagonal tilt of fold line (same convention as public API).
+    void drawCurl(int texSlot, float foldX, float foldSlope, bool backFace, float darken);
 
-    // Draw a vertical shadow strip to the right of foldX (on the revealed page).
-    void drawRevealShadow(float foldX);
+    // Draw a parallelogram shadow strip to the right of the diagonal fold line (revealed page).
+    void drawRevealShadow(float foldX, float foldSlope);
 
-    // Draw a vertical shadow strip to the left of foldX (on the current page).
-    void drawFlatShadow(float foldX);
+    // Draw a parallelogram shadow strip to the left of the diagonal fold line (current page).
+    void drawFlatShadow(float foldX, float foldSlope);
+
+    // Create a 2×1 RGBA gradient texture (left colour → right colour).
+    GLuint createGradientTex(uint8_t r0, uint8_t g0, uint8_t b0, uint8_t a0,
+                             uint8_t r1, uint8_t g1, uint8_t b1, uint8_t a1);
 };

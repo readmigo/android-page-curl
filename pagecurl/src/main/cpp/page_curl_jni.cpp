@@ -60,14 +60,14 @@ Java_io_github_readmigo_pagecurl_PageCurlJNI_nativeSetBitmap(JNIEnv* env, jclass
 
 JNIEXPORT void JNICALL
 Java_io_github_readmigo_pagecurl_PageCurlJNI_nativeDrawForward(JNIEnv*, jclass, jlong ptr,
-                                                                jfloat foldX) {
-    reinterpret_cast<PageCurlRenderer*>(ptr)->drawForward(foldX);
+                                                                jfloat foldX, jfloat foldSlope) {
+    reinterpret_cast<PageCurlRenderer*>(ptr)->drawForward(foldX, foldSlope);
 }
 
 JNIEXPORT void JNICALL
 Java_io_github_readmigo_pagecurl_PageCurlJNI_nativeDrawBackward(JNIEnv*, jclass, jlong ptr,
-                                                                 jfloat foldX) {
-    reinterpret_cast<PageCurlRenderer*>(ptr)->drawBackward(foldX);
+                                                                 jfloat foldX, jfloat foldSlope) {
+    reinterpret_cast<PageCurlRenderer*>(ptr)->drawBackward(foldX, foldSlope);
 }
 
 JNIEXPORT void JNICALL
