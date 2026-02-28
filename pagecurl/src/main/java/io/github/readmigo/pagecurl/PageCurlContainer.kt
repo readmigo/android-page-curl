@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import android.graphics.Paint
 import android.graphics.PointF
 import android.graphics.RectF
+import android.util.Log
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.Spring
@@ -32,6 +33,7 @@ import androidx.compose.ui.layout.onSizeChanged
 import kotlinx.coroutines.launch
 import kotlin.math.abs
 
+private const val TAG = "PageCurl"
 private const val COMPLETION_THRESHOLD = 0.35f
 private const val VELOCITY_THRESHOLD = 500f
 
@@ -71,7 +73,9 @@ fun PageCurlContainer(
     val bgArgb = backgroundColor.toArgb()
 
     var currentPage by remember(pageCount, startFromLastPage) {
-        mutableIntStateOf(if (startFromLastPage && pageCount > 0) pageCount - 1 else 0)
+        val initial = if (startFromLastPage && pageCount > 0) pageCount - 1 else 0
+        Log.d(TAG, "init: pageCount=$pageCount, startFromLastPage=$startFromLastPage, initialPage=$initial")
+        mutableIntStateOf(initial)
     }
 
     // Page dimensions (in pixels)
@@ -91,11 +95,16 @@ fun PageCurlContainer(
 
     // Report page changes
     LaunchedEffect(currentPage, pageCount) {
-        if (pageCount > 0) onPageChanged(currentPage + 1, pageCount)
+        if (pageCount > 0) {
+            Log.d(TAG, "pageChanged: ${currentPage + 1}/$pageCount")
+            onPageChanged(currentPage + 1, pageCount)
+        }
     }
 
     // ---- Animation helpers ----
     fun animateToComplete(forward: Boolean) {
+        val dir = if (forward) "forward" else "backward"
+        Log.d(TAG, "animateComplete: $dir, page=${currentPage + 1}/$pageCount")
         scope.launch {
             isAnimCompleting = true
             animProgress.snapTo(0f)
@@ -104,9 +113,19 @@ fun PageCurlContainer(
                 tween(durationMillis = 300, easing = FastOutSlowInEasing)
             )
             if (forward) {
-                if (currentPage < pageCount - 1) currentPage++ else onReachEnd()
+                if (currentPage < pageCount - 1) {
+                    currentPage++
+                } else {
+                    Log.d(TAG, "reachEnd: page=${currentPage + 1}/$pageCount")
+                    onReachEnd()
+                }
             } else {
-                if (currentPage > 0) currentPage-- else onReachStart()
+                if (currentPage > 0) {
+                    currentPage--
+                } else {
+                    Log.d(TAG, "reachStart: page=${currentPage + 1}/$pageCount")
+                    onReachStart()
+                }
             }
             dragCorner = null
             isAnimCompleting = false
@@ -114,6 +133,7 @@ fun PageCurlContainer(
     }
 
     fun animateToCancel() {
+        Log.d(TAG, "animateCancel: snapBack, page=${currentPage + 1}/$pageCount")
         scope.launch {
             isAnimCompleting = false
             animProgress.snapTo(0f)
@@ -147,6 +167,7 @@ fun PageCurlContainer(
             .onSizeChanged { size ->
                 pageW = size.width.toFloat()
                 pageH = size.height.toFloat()
+                Log.d(TAG, "sizeChanged: ${size.width}x${size.height}")
             }
             // Drag gesture
             .pointerInput(pageCount, currentPage) {
@@ -164,6 +185,9 @@ fun PageCurlContainer(
                             0f
                         }
                         dragCorner = PointF(cornerX, cornerY)
+                        val dir = if (curlForward) "forward" else "backward"
+                        val corner = if (cornerY > 0) "bottom" else "top"
+                        Log.d(TAG, "dragStart: $dir, ${corner}Corner, offset=(${startOffset.x.toInt()},${startOffset.y.toInt()})")
                     },
                     onDrag = { change, dragAmount ->
                         change.consume()
@@ -210,6 +234,10 @@ fun PageCurlContainer(
                             currentPage > 0
                         }
 
+                        val dir = if (curlForward) "forward" else "backward"
+                        val reason = if (abs(vx) > VELOCITY_THRESHOLD) "velocity" else "threshold"
+                        Log.d(TAG, "dragEnd: $dir, progress=${String.format("%.2f", progress)}, vx=${vx.toInt()}, $reason→${if (shouldComplete) "complete" else "cancel"}, canTurn=$canTurn, page=${currentPage + 1}/$pageCount")
+
                         // Set up animation endpoints
                         animStartPt = PointF(cp.x, cp.y)
                         if (shouldComplete && canTurn) {
@@ -231,6 +259,7 @@ fun PageCurlContainer(
                         }
                     },
                     onDragCancel = {
+                        Log.d(TAG, "dragCancel: page=${currentPage + 1}/$pageCount")
                         val cp = dragCorner ?: return@detectDragGestures
                         animStartPt = PointF(cp.x, cp.y)
                         val originX = if (curlForward) pageW else 0f
@@ -245,6 +274,12 @@ fun PageCurlContainer(
                 detectTapGestures(
                     onTap = { offset ->
                         val third = size.width / 3
+                        val zone = when {
+                            offset.x < third -> "LEFT"
+                            offset.x > third * 2 -> "RIGHT"
+                            else -> "CENTER"
+                        }
+                        Log.d(TAG, "tap: zone=$zone, offset=(${offset.x.toInt()},${offset.y.toInt()}), page=${currentPage + 1}/$pageCount")
                         when {
                             offset.x < third -> {
                                 if (currentPage > 0) {
