@@ -515,7 +515,7 @@ git clone https://github.com/readmigo/android-page-curl.git
 ## License
 
 ```
-Copyright 2024 Readmigo
+Copyright 2026 Readmigo
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
